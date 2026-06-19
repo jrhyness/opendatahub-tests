@@ -1223,34 +1223,55 @@ def minimal_subscription_for_free_user(
     admin_client: DynamicClient,
     maas_unprivileged_model_namespace,
     maas_subscription_namespace,
+    maas_model_service_account: ServiceAccount,
+    maas_gateway_api: None,
 ) -> Generator[Any, Any, Any]:
-    """Create a minimal MaaSModelRef + MaaSSubscription for system:authenticated."""
+    """Create a minimal LLMInferenceService + MaaSModelRef + MaaSSubscription for system:authenticated."""
     model_ns = maas_unprivileged_model_namespace.name
     model_name = f"e2e-authz-model-{generate_random_name()}"
     sub_name = f"e2e-authz-free-sub-{generate_random_name()}"
 
     with (
-        MaaSModelRef(
+        create_llmisvc(
             client=admin_client,
             name=model_name,
             namespace=model_ns,
-            model_ref={"name": model_name, "namespace": model_ns, "kind": "LLMInferenceService"},
-            teardown=True,
-            wait_for_resource=True,
-        ) as model_ref,
-        create_maas_subscription(
-            admin_client=admin_client,
-            subscription_namespace=maas_subscription_namespace.name,
-            subscription_name=sub_name,
-            owner_group_name="system:authenticated",
-            model_name=model_ref.name,
-            model_namespace=model_ref.namespace,
-            tokens_per_minute=1000,
-            window="1m",
-            priority=0,
-            teardown=True,
-            wait_for_resource=True,
-        ) as subscription,
+            storage_uri=ModelStorage.S3.TINYLLAMA,
+            container_image=ContainerImages.VLLM.CPU,
+            container_resources={
+                "limits": {"cpu": "2", "memory": "12Gi"},
+                "requests": {"cpu": "1", "memory": "8Gi"},
+            },
+            service_account=maas_model_service_account.name,
+            wait=False,
+            timeout=900,
+        ) as llm_service,
+        patch_llmisvc_with_maas_router_and_tiers(llm_service=llm_service, tiers=[]),
     ):
-        subscription.wait_for_condition(condition="Ready", status="True", timeout=300)
-        yield subscription
+        llm_service.wait_for_condition(condition="Ready", status="True", timeout=900)
+
+        with (
+            MaaSModelRef(
+                client=admin_client,
+                name=model_name,
+                namespace=model_ns,
+                model_ref={"name": model_name, "namespace": model_ns, "kind": "LLMInferenceService"},
+                teardown=True,
+                wait_for_resource=True,
+            ) as model_ref,
+            create_maas_subscription(
+                admin_client=admin_client,
+                subscription_namespace=maas_subscription_namespace.name,
+                subscription_name=sub_name,
+                owner_group_name="system:authenticated",
+                model_name=model_ref.name,
+                model_namespace=model_ref.namespace,
+                tokens_per_minute=1000,
+                window="1m",
+                priority=0,
+                teardown=True,
+                wait_for_resource=True,
+            ) as subscription,
+        ):
+            subscription.wait_for_condition(condition="Ready", status="True", timeout=300)
+            yield subscription

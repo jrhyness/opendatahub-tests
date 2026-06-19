@@ -31,9 +31,10 @@ from utilities.resources.aigateway import AIGateway
 def aigateway_infra_namespace(admin_client: DynamicClient) -> str:
     """Return the infra namespace where AIGateway objects are created."""
     infra_namespace = Namespace(client=admin_client, name=AIGATEWAY_INFRA_NAMESPACE)
-    assert infra_namespace.exists, (
-        f"Infra namespace '{AIGATEWAY_INFRA_NAMESPACE}' not found — required for AIGateway multitenancy tests"
-    )
+    if not infra_namespace.exists:
+        pytest.skip(
+            f"Infra namespace '{AIGATEWAY_INFRA_NAMESPACE}' not found — skipping AIGateway multitenancy tests"
+        )
     return AIGATEWAY_INFRA_NAMESPACE
 
 
