@@ -162,7 +162,11 @@ def _patch_payload_processing_annotation(
         ensure_exists=True,
     )
     tenant_config.update(
-        resource_dict={"metadata": {"annotations": {ANNOTATION_PAYLOAD_PROCESSING_TYPE: value}}},
+        # The body must carry metadata.name: Resource.update patches via the
+        # dynamic client, which resolves the target name from the body.
+        resource_dict={
+            "metadata": {"name": TENANT_CONFIG_NAME, "annotations": {ANNOTATION_PAYLOAD_PROCESSING_TYPE: value}}
+        },
     )
 
 
