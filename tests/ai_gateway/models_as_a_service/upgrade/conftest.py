@@ -33,6 +33,10 @@ from tests.ai_gateway.models_as_a_service.multitenancy.external_model.utils impo
     find_agc_deployment,
     wait_for_gateway_attachment_ready,
 )
+from tests.ai_gateway.models_as_a_service.praxis.constants import (
+    PRAXIS_PAYLOAD_PROCESSING_TYPE_ANNOTATION,
+    PRAXIS_PAYLOAD_PROCESSING_TYPE_VALUE,
+)
 from tests.ai_gateway.models_as_a_service.upgrade.utils import (
     AGC_UPGRADE_API_KEY_SECRET_KEY,
     AGC_UPGRADE_API_KEY_SECRET_NAME,
@@ -89,6 +93,7 @@ from tests.ai_gateway.models_as_a_service.upgrade.utils import (
     capture_agc_upgrade_baseline as capture_agc_baseline_snapshot,
 )
 from tests.ai_gateway.models_as_a_service.utils import (
+    DEFAULT_MAAS_TENANT_NAME,
     MaaSTenantResource,
     assert_api_key_created_ok,
     create_api_key,
@@ -105,6 +110,7 @@ from utilities.plugins.constant import OpenAIEnpoints
 from utilities.resources.external_model import ExternalModel
 from utilities.resources.legacy_external_model import LegacyExternalModel
 from utilities.resources.llm_inference_service import LLMInferenceService
+from utilities.resources.maastenantconfig import MaasTenantConfig
 
 LOGGER = structlog.get_logger(name=__name__)
 
@@ -118,6 +124,54 @@ def upgrade_gateway_route_ca_bundle(admin_client: DynamicClient) -> Generator[st
     """
     with router_ca_bundle_env(client=admin_client) as bundle:
         yield bundle
+
+
+@pytest.fixture(scope="session", autouse=True)
+def maas_upgrade_praxis_backend_pinned(
+    pytestconfig: pytest.Config,
+    admin_client: DynamicClient,
+    maas_subscription_namespace: Namespace,
+) -> None:
+    """Pin the platform tenant's payload-processing backend to praxis (pre-upgrade only).
+
+    The ``payload-processing-type`` annotation is the cross-version contract
+    both maas-controller and ai-gateway-controller read to select a tenant's
+    payload-processing backend. A pre-upgrade AGC built from main treats an
+    absent annotation as praxis, but the official RHOAI AGC treats absent as
+    legacy IPP: on takeover it deletes the platform tenant's praxis ext_proc
+    wiring, and it will only re-render praxis once the owning AITenant reports
+    Active — which maas-controller stamps only after the MaasTenantConfig is
+    Ready, which in turn needs the very EnvoyFilter the AGC deleted. That
+    circular wait leaves every model served through the default gateway
+    returning 500 after the image swap. Pinning the annotation to praxis
+    before the swap keeps both controller generations on the same backend,
+    so the upgraded AGC reconciles praxis in place and serving continues.
+    """
+    if not pytestconfig.option.pre_upgrade:
+        return
+    tenant_config = MaasTenantConfig(
+        client=admin_client,
+        name=DEFAULT_MAAS_TENANT_NAME,
+        namespace=maas_subscription_namespace.name,
+        ensure_exists=True,
+    )
+    annotations = tenant_config.instance.to_dict().get("metadata", {}).get("annotations") or {}
+    if annotations.get(PRAXIS_PAYLOAD_PROCESSING_TYPE_ANNOTATION) == PRAXIS_PAYLOAD_PROCESSING_TYPE_VALUE:
+        return
+    tenant_config.update(
+        # The body must carry metadata.name: Resource.update patches via the
+        # dynamic client, which resolves the target name from the body.
+        resource_dict={
+            "metadata": {
+                "name": DEFAULT_MAAS_TENANT_NAME,
+                "annotations": {PRAXIS_PAYLOAD_PROCESSING_TYPE_ANNOTATION: PRAXIS_PAYLOAD_PROCESSING_TYPE_VALUE},
+            }
+        },
+    )
+    LOGGER.info(
+        f"Pinned {maas_subscription_namespace.name}/{DEFAULT_MAAS_TENANT_NAME} "
+        f"payload-processing-type to '{PRAXIS_PAYLOAD_PROCESSING_TYPE_VALUE}' for the AGC upgrade"
+    )
 
 
 MAAS_UPGRADE_NAMESPACE = "upgrade-maas"
