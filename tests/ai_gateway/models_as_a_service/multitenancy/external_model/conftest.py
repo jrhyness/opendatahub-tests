@@ -8,7 +8,6 @@ gatewayRefs additive schema is not distributed yet.
 
 from __future__ import annotations
 
-import os
 from collections.abc import Generator
 from contextlib import ExitStack
 from typing import Any
@@ -39,42 +38,16 @@ from tests.ai_gateway.models_as_a_service.utils import (
     host_from_ingress_domain,
     verify_maas_gateway_programmed,
 )
-from utilities.certificates_utils import get_ca_bundle
+from utilities.certificates_utils import router_ca_bundle_env
 
 LOGGER = structlog.get_logger(name=__name__)
 
 
 @pytest.fixture(scope="session", autouse=True)
 def gateway_route_ca_bundle(admin_client: DynamicClient) -> Generator[str]:
-    """Trust the cluster's router CA for gateway Route TLS.
-
-    Tenant-gateway Route certificates are signed by the cluster's router CA,
-    which is not in the runner's trust store; without this, requests-based
-    inference (``infer_external_chat``) fails TLS verification. Resolves the
-    bundle the way ``utilities.autogluon`` does and exports it through
-    ``REQUESTS_CA_BUNDLE`` for the whole suite. Yields the bundle path, or
-    ``""`` when none is needed or available (managed clusters).
-    """
-    previous = os.environ.get("REQUESTS_CA_BUNDLE")
-    bundle = os.environ.get("TENANT_EXTERNAL_MODEL_CA_BUNDLE", "")
-    if not bundle:
-        try:
-            bundle = get_ca_bundle(client=admin_client)
-        except Exception as ex:  # noqa: BLE001 - trust resolution is best-effort
-            LOGGER.warning(
-                "Failed to resolve the OpenShift router CA bundle; gateway "
-                "inference falls back to the system trust store",
-                error=str(ex),
-            )
-    if bundle:
-        os.environ["REQUESTS_CA_BUNDLE"] = bundle
-    try:
+    """Trust the cluster's router CA for gateway Route TLS (see router_ca_bundle_env)."""
+    with router_ca_bundle_env(client=admin_client) as bundle:
         yield bundle
-    finally:
-        if previous is None:
-            os.environ.pop("REQUESTS_CA_BUNDLE", None)
-        else:
-            os.environ["REQUESTS_CA_BUNDLE"] = previous
 
 
 @pytest.fixture(scope="module")

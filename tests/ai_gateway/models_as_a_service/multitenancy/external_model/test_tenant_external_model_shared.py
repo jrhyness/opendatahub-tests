@@ -889,7 +889,8 @@ class TestTenantQuotaIsolation:
                     break
             else:
                 raise AssertionError(
-                    f"unexpected inference response on tenant A: {limited.status_code}: {redact_sensitive(limited.text)}"
+                    "unexpected inference response on tenant A: "
+                    f"{limited.status_code}: {redact_sensitive(limited.text)}"
                 )
             time.sleep(1.0)
         assert limited is not None and limited.status_code == 429, (
