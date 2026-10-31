@@ -858,6 +858,10 @@ class TestTenantQuotaIsolation:
         env = shared_env
         model = quota_model["model"]
         _require_client_name_alias(admin_client=admin_client, model=model, case=env["tenant_a"])
+        # The quota model binds to the usage simulator, not the header-echo
+        # endpoint: requests must carry the simulator's own path (the default
+        # echo /anything/<tag> path would 404 on it).
+        provider_path = quota_model["usage"]["provider_path"]
 
         # Drive tenant A past its budget: at least one 200 must precede the
         # 429 (a fresh budget always admits the first request — see
@@ -872,6 +876,7 @@ class TestTenantQuotaIsolation:
                 model_client_name=model["client_name"],
                 api_key=quota_model["access_a"]["api_key"],
                 path_tag=model["path_tag"],
+                provider_path=provider_path,
                 # No retries: a 429 near the end of the window would otherwise
                 # sleep past the reset and come back 200, hiding the rejection
                 # this loop must observe (the route is already warm).
@@ -883,7 +888,9 @@ class TestTenantQuotaIsolation:
                 if successes:
                     break
             else:
-                raise AssertionError(f"unexpected inference response on tenant A: {redact_sensitive(limited.text)}")
+                raise AssertionError(
+                    f"unexpected inference response on tenant A: {limited.status_code}: {redact_sensitive(limited.text)}"
+                )
             time.sleep(1.0)
         assert limited is not None and limited.status_code == 429, (
             f"tenant A did not hit its token budget after {successes} successes: "
@@ -899,6 +906,7 @@ class TestTenantQuotaIsolation:
             model_client_name=model["client_name"],
             api_key=quota_model["access_b"]["api_key"],
             path_tag=model["path_tag"],
+            provider_path=provider_path,
         )
         _assert_returns_usage(response=response)
 
@@ -909,6 +917,7 @@ class TestTenantQuotaIsolation:
             model_client_name=model["client_name"],
             api_key=quota_model["access_a"]["api_key"],
             path_tag=model["path_tag"],
+            provider_path=provider_path,
             retries=1,
         )
         assert still_limited.status_code == 429, (
@@ -921,5 +930,6 @@ class TestTenantQuotaIsolation:
             model_client_name=model["client_name"],
             api_key=quota_model["access_b"]["api_key"],
             path_tag=model["path_tag"],
+            provider_path=provider_path,
         )
         _assert_returns_usage(response=again_b)
