@@ -112,11 +112,26 @@ def _wait_default_backend(
         assert deployment is not None, "default payload-processing deployment not found"
         current = _default_payload_processing_is_praxis(admin_client=admin_client)
         assert current == praxis, f"default payload-processing praxis={current}, expected {praxis}"
-        # A spec-only check can pass while the switch is still rolling out;
-        # require a live replica so the selected backend has actually started.
+        # A spec-only check can pass while the switch is still rolling out:
+        # availableReplicas is an aggregate that also counts pods from the
+        # previous ReplicaSet. Require the rollout to have completed on the
+        # spec's generation so only the selected backend's pods are live.
         status = deployment.get("status") or {}
+        generation = (deployment.get("metadata") or {}).get("generation", 0)
+        assert status.get("observedGeneration", 0) >= generation, (
+            "default payload-processing deployment has not observed the current generation"
+        )
         assert status.get("availableReplicas", 0) >= 1, (
             "default payload-processing deployment has no available replicas"
+        )
+        progressing = [
+            condition
+            for condition in status.get("conditions") or []
+            if condition.get("type") == "Progressing" and condition.get("status") == "True"
+        ]
+        assert progressing and progressing[0].get("reason") == "NewReplicaSetAvailable", (
+            "default payload-processing rollout has not completed "
+            f"(Progressing: {progressing[0].get('reason') if progressing else 'absent'})"
         )
         return True
 
