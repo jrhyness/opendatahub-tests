@@ -870,23 +870,35 @@ class TestTenantQuotaIsolation:
         limited = None
         deadline = time.time() + 90
         while time.time() < deadline:
-            limited = infer_external_chat(
-                gateway_url=env["tenant_a"]["gateway_url"],
-                model_namespace=model["namespace"],
-                model_client_name=model["client_name"],
-                api_key=quota_model["access_a"]["api_key"],
-                path_tag=model["path_tag"],
-                provider_path=provider_path,
-                # No retries: a 429 near the end of the window would otherwise
-                # sleep past the reset and come back 200, hiding the rejection
-                # this loop must observe (the route is already warm).
-                retries=0,
-            )
+            try:
+                limited = infer_external_chat(
+                    gateway_url=env["tenant_a"]["gateway_url"],
+                    model_namespace=model["namespace"],
+                    model_client_name=model["client_name"],
+                    api_key=quota_model["access_a"]["api_key"],
+                    path_tag=model["path_tag"],
+                    provider_path=provider_path,
+                    # No helper retries: a 429 near the end of the window would
+                    # otherwise sleep past the reset and come back 200, hiding
+                    # the rejection this loop must observe (the route is warm).
+                    retries=0,
+                )
+            except requests.RequestException:
+                # retries=0 also disables the helper's connection-error
+                # retries; a transient network failure must not end the
+                # exhaustion loop before the budget is reached.
+                time.sleep(1.0)
+                continue
             if limited.status_code == 200:
                 successes += 1
             elif limited.status_code == 429:
                 if successes:
                     break
+            elif limited.status_code >= 500:
+                # Same for transient 5xx: retry inside the loop until the
+                # deadline rather than failing the exhaustion drive.
+                time.sleep(1.0)
+                continue
             else:
                 raise AssertionError(
                     "unexpected inference response on tenant A: "

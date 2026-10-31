@@ -14,6 +14,7 @@ from ocp_resources.maas_auth_policy import MaaSAuthPolicy
 from ocp_resources.maas_model_ref import MaaSModelRef
 from ocp_resources.maas_subscription import MaaSSubscription
 from ocp_resources.namespace import Namespace
+from ocp_resources.resource import ResourceEditor
 from ocp_resources.secret import Secret
 from pytest import FixtureRequest
 
@@ -39,6 +40,7 @@ from tests.ai_gateway.models_as_a_service.upgrade.utils import (
     AGC_UPGRADE_BASELINE_CM_NAME,
     AGC_UPGRADE_MODEL_NAME,
     AGC_UPGRADE_NAMESPACE,
+    AGC_UPGRADE_NAMESPACE_OWNER_LABEL,
     AGC_UPGRADE_SUBSCRIPTION_NAME,
     LEGACY_MIGRATION_AUTH_POLICY_NAME,
     LEGACY_MIGRATION_ENDPOINT,
@@ -56,6 +58,7 @@ from tests.ai_gateway.models_as_a_service.upgrade.utils import (
     LegacyMigrationBaseline,
     MaaSBaseline,
     MultitenantUpgradeTenantRecord,
+    agc_upgrade_namespace_is_owned,
     assert_multitenant_upgrade_api_key_secrets_absent,
     assert_multitenant_upgrade_api_key_secrets_present,
     capture_legacy_migration_baseline,
@@ -1180,19 +1183,36 @@ def agc_upgrade_namespace(
     namespace = Namespace(client=admin_client, name=AGC_UPGRADE_NAMESPACE)
     if pytestconfig.option.post_upgrade:
         yield namespace
-        if teardown_resources and namespace.exists:
+        # Delete only what this suite created: a same-named namespace from
+        # another run must survive a post-upgrade teardown.
+        if teardown_resources and agc_upgrade_namespace_is_owned(admin_client=admin_client):
             namespace.clean_up()
     else:
         if namespace.exists:
             LOGGER.info(f"Namespace {AGC_UPGRADE_NAMESPACE} already exists, reusing it")
+            if not agc_upgrade_namespace_is_owned(admin_client=admin_client):
+                # Not ours: do not delete it later, and mark the conflict so
+                # a failure here names the cause instead of a later 409.
+                LOGGER.warning(
+                    f"Namespace {AGC_UPGRADE_NAMESPACE} exists without the upgrade-suite "
+                    f"owner label; assuming foreign ownership and keeping it"
+                )
             yield namespace
         else:
             with create_ns(
                 admin_client=admin_client,
                 name=AGC_UPGRADE_NAMESPACE,
-                teardown=teardown_resources,
+                teardown=False,
             ) as created_namespace:
+                # Mark ownership after creation (create_ns takes no labels):
+                # teardown and clean_up_agc_upgrade_resources delete the
+                # namespace only when this label is present.
+                ResourceEditor(
+                    patches={created_namespace: {"metadata": {"labels": {AGC_UPGRADE_NAMESPACE_OWNER_LABEL: "true"}}}}
+                ).update()
                 yield created_namespace
+                if teardown_resources and agc_upgrade_namespace_is_owned(admin_client=admin_client):
+                    created_namespace.clean_up()
 
 
 @pytest.fixture(scope="session")

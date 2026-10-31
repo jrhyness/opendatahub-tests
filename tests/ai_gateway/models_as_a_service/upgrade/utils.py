@@ -1748,6 +1748,19 @@ AGC_UPGRADE_API_KEY_SECRET_NAME = "upgrade-maas-agc-em-api-key"  # pragma: allow
 AGC_UPGRADE_BASELINE_CM_NAME = "maas-agc-upgrade-baseline"
 AGC_UPGRADE_BASELINE_CM_KEY = "agc_upgrade_baseline"
 AGC_UPGRADE_API_KEY_SECRET_KEY = "api-key"  # pragma: allowlist secret
+# Marks the upgrade namespace as created by this suite: teardown deletes it
+# only when the marker is present, so a same-named namespace from another
+# run/user is never removed (existence alone is not ownership).
+AGC_UPGRADE_NAMESPACE_OWNER_LABEL = "e2e.maas.opendatahub.io/agc-upgrade-fixture"
+
+
+def agc_upgrade_namespace_is_owned(admin_client: DynamicClient) -> bool:
+    """Whether the upgrade namespace exists and carries this suite's owner label."""
+    namespace = Namespace(client=admin_client, name=AGC_UPGRADE_NAMESPACE)
+    if not namespace.exists:
+        return False
+    labels = namespace.instance.metadata.labels or {}
+    return labels.get(AGC_UPGRADE_NAMESPACE_OWNER_LABEL) == "true"
 
 
 def clean_up_agc_upgrade_resources(
@@ -1783,7 +1796,7 @@ def clean_up_agc_upgrade_resources(
         if governance.exists:
             governance.clean_up()
     namespace = Namespace(client=admin_client, name=AGC_UPGRADE_NAMESPACE)
-    if namespace.exists:
+    if namespace.exists and agc_upgrade_namespace_is_owned(admin_client=admin_client):
         namespace.clean_up()
 
 
